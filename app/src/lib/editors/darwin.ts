@@ -32,6 +32,10 @@ const editors: IDarwinExternalEditor[] = [
     bundleIdentifiers: ['org.vim.MacVim'],
   },
   {
+    name: 'Neovide',
+    bundleIdentifiers: ['com.neovide.neovide'],
+  },
+  {
     name: 'Visual Studio Code',
     bundleIdentifiers: ['com.microsoft.VSCode'],
   },
@@ -41,7 +45,7 @@ const editors: IDarwinExternalEditor[] = [
   },
   {
     name: 'VSCodium',
-    bundleIdentifiers: ['com.visualstudio.code.oss'],
+    bundleIdentifiers: ['com.visualstudio.code.oss', 'com.vscodium'],
   },
   {
     name: 'Sublime Text',
@@ -64,6 +68,14 @@ const editors: IDarwinExternalEditor[] = [
     bundleIdentifiers: ['com.jetbrains.PyCharm'],
   },
   {
+    name: 'PyCharm Community Edition',
+    bundleIdentifiers: ['com.jetbrains.pycharm.ce'],
+  },
+  {
+    name: 'DataSpell',
+    bundleIdentifiers: ['com.jetbrains.DataSpell'],
+  },
+  {
     name: 'RubyMine',
     bundleIdentifiers: ['com.jetbrains.RubyMine'],
   },
@@ -82,6 +94,10 @@ const editors: IDarwinExternalEditor[] = [
   {
     name: 'WebStorm',
     bundleIdentifiers: ['com.jetbrains.WebStorm'],
+  },
+  {
+    name: 'CLion',
+    bundleIdentifiers: ['com.jetbrains.CLion'],
   },
   {
     name: 'Typora',
@@ -128,6 +144,18 @@ const editors: IDarwinExternalEditor[] = [
     name: 'Nova',
     bundleIdentifiers: ['com.panic.Nova'],
   },
+  {
+    name: 'Emacs',
+    bundleIdentifiers: ['org.gnu.Emacs'],
+  },
+  {
+    name: 'Lite XL',
+    bundleIdentifiers: ['com.lite-xl'],
+  },
+  {
+    name: 'Fleet',
+    bundleIdentifiers: ['Fleet.app'],
+  },
 ]
 
 async function findApplication(
@@ -144,11 +172,7 @@ async function findApplication(
           : Promise.reject(e)
       )
 
-      if (installPath === null) {
-        return null
-      }
-
-      if (await pathExists(installPath)) {
+      if (installPath && (await pathExists(installPath))) {
         return installPath
       }
 

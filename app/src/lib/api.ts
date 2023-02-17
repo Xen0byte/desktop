@@ -508,6 +508,15 @@ export interface IAPIPullRequestReview {
     | 'CHANGES_REQUESTED'
 }
 
+/** Represents both issue comments and PR review comments */
+export interface IAPIComment {
+  readonly id: number
+  readonly body: string
+  readonly html_url: string
+  readonly user: IAPIIdentity
+  readonly created_at: string
+}
+
 /** The metadata about a GitHub server. */
 export interface IServerMetadata {
   /**
@@ -1047,17 +1056,78 @@ export class API {
     }
   }
 
+  /** Fetches all reviews from a given pull request. */
+  public async fetchPullRequestReviews(
+    owner: string,
+    name: string,
+    prNumber: string
+  ) {
+    try {
+      const path = `/repos/${owner}/${name}/pulls/${prNumber}/reviews`
+      const response = await this.request('GET', path)
+      return await parsedResponse<IAPIPullRequestReview[]>(response)
+    } catch (e) {
+      log.debug(
+        `failed fetching PR reviews for ${owner}/${name}/pulls/${prNumber}`,
+        e
+      )
+      return []
+    }
+  }
+
+  /** Fetches all review comments from a given pull request. */
+  public async fetchPullRequestReviewComments(
+    owner: string,
+    name: string,
+    prNumber: string,
+    reviewId: string
+  ) {
+    try {
+      const path = `/repos/${owner}/${name}/pulls/${prNumber}/reviews/${reviewId}/comments`
+      const response = await this.request('GET', path)
+      return await parsedResponse<IAPIComment[]>(response)
+    } catch (e) {
+      log.debug(
+        `failed fetching PR review comments for ${owner}/${name}/pulls/${prNumber}`,
+        e
+      )
+      return []
+    }
+  }
+
+  /** Fetches all comments from a given pull request. */
+  public async fetchPullRequestComments(
+    owner: string,
+    name: string,
+    prNumber: string
+  ) {
+    try {
+      const path = `/repos/${owner}/${name}/pulls/${prNumber}/comments`
+      const response = await this.request('GET', path)
+      return await parsedResponse<IAPIComment[]>(response)
+    } catch (e) {
+      log.debug(
+        `failed fetching PR comments for ${owner}/${name}/pulls/${prNumber}`,
+        e
+      )
+      return []
+    }
+  }
+
   /**
    * Get the combined status for the given ref.
    */
   public async fetchCombinedRefStatus(
     owner: string,
     name: string,
-    ref: string
+    ref: string,
+    reloadCache: boolean = false
   ): Promise<IAPIRefStatus | null> {
     const safeRef = encodeURIComponent(ref)
     const path = `repos/${owner}/${name}/commits/${safeRef}/status?per_page=100`
-    const response = await this.request('GET', path)
+    const response = await this.request('GET', path, {
+      reloadCache,
+    })
 
     try {
       return await parsedResponse<IAPIRefStatus>(response)
@@ -1076,7 +1146,8 @@ export class API {
   public async fetchRefCheckRuns(
     owner: string,
     name: string,
-    ref: string
+    ref: string,
+    reloadCache: boolean = false
   ): Promise<IAPIRefCheckRuns | null> {
     const safeRef = encodeURIComponent(ref)
     const path = `repos/${owner}/${name}/commits/${safeRef}/check-runs?per_page=100`
@@ -1084,7 +1155,10 @@ export class API {
       Accept: 'application/vnd.github.antiope-preview+json',
     }
 
-    const response = await this.request('GET', path, { customHeaders: headers })
+    const response = await this.request('GET', path, {
+      customHeaders: headers,
+      reloadCache,
+    })
 
     try {
       return await parsedResponse<IAPIRefCheckRuns>(response)

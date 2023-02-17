@@ -17,6 +17,7 @@ import { createUniqueId, releaseUniqueId } from '../../lib/id-pool'
 import { range } from '../../../lib/range'
 import { ListItemInsertionOverlay } from './list-item-insertion-overlay'
 import { DragData, DragType } from '../../../models/drag-drop'
+import memoizeOne from 'memoize-one'
 
 /**
  * Describe the first argument given to the cellRenderer,
@@ -74,6 +75,14 @@ interface IListProps {
    * The currently selected rows indexes. Used to attach a special
    * selection class on those row's containers as well as being used
    * for keyboard selection.
+   *
+   * It is expected that the use case for this is setting of the initially
+   * selected rows or clearing a list selection.
+   *
+   * N.B. Since it is used for keyboard selection, changing the ordering of
+   * elements in this array in a parent component may result in unexpected
+   * behaviors when a user modifies their selection via key commands.
+   * See #15536 lessons learned.
    */
   readonly selectedRows: ReadonlyArray<number>
 
@@ -181,6 +190,18 @@ interface IListProps {
   readonly onRowMouseDown?: (row: number, event: React.MouseEvent<any>) => void
 
   /**
+   * A handler called whenever a context menu event is received on the
+   * row container element.
+   *
+   * The context menu is invoked when a user right clicks the row or
+   * uses keyboard shortcut.
+   */
+  readonly onRowContextMenu?: (
+    row: number,
+    event: React.MouseEvent<HTMLDivElement>
+  ) => void
+
+  /**
    * A handler called whenever the user drops items on the list to be inserted.
    *
    * @param row - The index of the row where the user intends to insert the new
@@ -223,13 +244,20 @@ interface IListProps {
    */
   readonly focusOnHover?: boolean
 
-  readonly ariaMode?: 'list' | 'menu'
-
   /**
    * The number of pixels from the top of the list indicating
    * where to scroll do on rendering of the list.
    */
   readonly setScrollTop?: number
+
+  /**
+   * Optional callback for providing an aria label for screen readers for each
+   * row.
+   *
+   * Note: you may need to apply an aria-hidden attribute to any child text
+   * elements for this to take precedence.
+   */
+  readonly getRowAriaLabel?: (row: number) => string | undefined
 }
 
 interface IListState {
@@ -261,6 +289,8 @@ export class List extends React.Component<IListProps, IListState> {
   private fakeScroll: HTMLDivElement | null = null
   private focusRow = -1
 
+  private readonly rowRefs = new Map<number, HTMLDivElement>()
+
   /**
    * The style prop for our child Grid. We keep this here in order
    * to not create a new object on each render and thus forcing
@@ -282,6 +312,22 @@ export class List extends React.Component<IListProps, IListState> {
   private grid: Grid | null = null
   private readonly resizeObserver: ResizeObserver | null = null
   private updateSizeTimeoutId: NodeJS.Immediate | null = null
+
+  /**
+   * Get the props for the inner scroll container (called containerProps on the
+   * Grid component). This is memoized to avoid causing the Grid component to
+   * rerender every time the list component rerenders (the Grid component is a
+   * pure component so a complex object like containerProps being instantiated
+   * on each render would cause it to rerender constantly).
+   */
+  private getContainerProps = memoizeOne(
+    (
+      activeDescendant: string | undefined
+    ): React.HTMLProps<HTMLDivElement> => ({
+      onKeyDown: this.onKeyDown,
+      'aria-activedescendant': activeDescendant,
+    })
+  )
 
   public constructor(props: IListProps) {
     super(props)
@@ -529,11 +575,15 @@ export class List extends React.Component<IListProps, IListState> {
       this.props.onRowKeyDown(rowIndex, event)
     }
 
+    const hasModifier =
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+
     // We give consumers the power to prevent the onRowClick event by subscribing
     // to the onRowKeyDown event and calling event.preventDefault. This lets
     // consumers add their own semantics for keyboard presses.
     if (
       !event.defaultPrevented &&
+      !hasModifier &&
       (event.key === 'Enter' || event.key === ' ')
     ) {
       this.toggleSelection(event)
@@ -542,12 +592,25 @@ export class List extends React.Component<IListProps, IListState> {
   }
 
   private onFocusContainerKeyDown = (event: React.KeyboardEvent<any>) => {
+    const hasModifier =
+      event.altKey || event.ctrlKey || event.metaKey || event.shiftKey
+
     if (
       !event.defaultPrevented &&
+      !hasModifier &&
       (event.key === 'Enter' || event.key === ' ')
     ) {
       this.toggleSelection(event)
       event.preventDefault()
+    }
+  }
+
+  private onFocusWithinChanged = (focusWithin: boolean) => {
+    // So the grid lost focus (we manually focus the grid if the focused list
+    // item is unmounted) so we mustn't attempt to refocus the previously
+    // focused list item if it scrolls back into view.
+    if (!focusWithin) {
+      this.focusRow = -1
     }
   }
 
@@ -570,19 +633,33 @@ export class List extends React.Component<IListProps, IListState> {
     })
   }
 
+  private onRowFocus = (index: number, e: React.FocusEvent<HTMLDivElement>) => {
+    this.focusRow = index
+  }
+
+  private onRowBlur = (index: number, e: React.FocusEvent<HTMLDivElement>) => {
+    if (this.focusRow === index) {
+      this.focusRow = -1
+    }
+  }
+
+  private onRowContextMenu = (
+    row: number,
+    e: React.MouseEvent<HTMLDivElement>
+  ) => {
+    this.props.onRowContextMenu?.(row, e)
+  }
+
   private onRowMouseOver = (row: number, event: React.MouseEvent<any>) => {
     if (this.props.selectOnHover && this.canSelectRow(row)) {
-      if (
-        this.props.selectedRows.includes(row) &&
-        this.props.onSelectionChanged
-      ) {
-        this.props.onSelectionChanged([row], { kind: 'hover', event })
+      if (!this.props.selectedRows.includes(row)) {
+        this.props.onSelectionChanged?.([row], { kind: 'hover', event })
         // By calling scrollRowToVisible we ensure that hovering over a partially
         // visible item at the top or bottom of the list scrolls it into view but
         // more importantly `scrollRowToVisible` automatically manages focus so
         // using it here allows us to piggy-back on its focus-preserving magic
         // even though we could theoretically live without scrolling
-        this.scrollRowToVisible(row)
+        this.scrollRowToVisible(row, this.props.focusOnHover !== false)
       }
     }
   }
@@ -704,10 +781,14 @@ export class List extends React.Component<IListProps, IListState> {
     this.scrollRowToVisible(row)
   }
 
-  private scrollRowToVisible(row: number) {
+  private scrollRowToVisible(row: number, moveFocus = true) {
     if (this.grid !== null) {
       this.grid.scrollToCell({ rowIndex: row, columnIndex: 0 })
-      this.focusRow = row
+
+      if (moveFocus) {
+        this.focusRow = row
+        this.rowRefs.get(row)?.focus({ preventScroll: true })
+      }
     }
   }
 
@@ -788,12 +869,27 @@ export class List extends React.Component<IListProps, IListState> {
     }
   }
 
-  private onFocusedItemRef = (element: HTMLDivElement | null) => {
-    if (this.props.focusOnHover !== false && element !== null) {
-      element.focus()
+  private onRowRef = (rowIndex: number, element: HTMLDivElement | null) => {
+    if (element === null) {
+      this.rowRefs.delete(rowIndex)
+    } else {
+      this.rowRefs.set(rowIndex, element)
     }
 
-    this.focusRow = -1
+    if (rowIndex === this.focusRow) {
+      // The currently focused row is going being unmounted so we'll move focus
+      // programmatically to the grid so that keyboard navigation still works
+      if (element === null) {
+        const grid = ReactDOM.findDOMNode(this.grid)
+        if (grid instanceof HTMLElement) {
+          grid.focus({ preventScroll: true })
+        }
+      } else {
+        // A previously focused row is being mounted again, we'll move focus
+        // back to it
+        element.focus({ preventScroll: true })
+      }
+    }
   }
 
   private getCustomRowClassNames = (rowIndex: number) => {
@@ -820,16 +916,11 @@ export class List extends React.Component<IListProps, IListState> {
     const selected = this.props.selectedRows.indexOf(rowIndex) !== -1
     const customClasses = this.getCustomRowClassNames(rowIndex)
 
-    const focused = rowIndex === this.focusRow
-
     // An unselectable row shouldn't be focusable
     let tabIndex: number | undefined = undefined
     if (selectable) {
       tabIndex = selected && this.props.selectedRows[0] === rowIndex ? 0 : -1
     }
-
-    // We only need to keep a reference to the focused element
-    const ref = focused ? this.onFocusedItemRef : undefined
 
     const row = this.props.rowRenderer(rowIndex)
 
@@ -850,20 +941,28 @@ export class List extends React.Component<IListProps, IListState> {
       ? `${this.state.rowIdPrefix}-${rowIndex}`
       : undefined
 
+    const ariaLabel =
+      this.props.getRowAriaLabel !== undefined
+        ? this.props.getRowAriaLabel(rowIndex)
+        : undefined
+
     return (
       <ListRow
         key={params.key}
         id={id}
-        onRef={ref}
+        onRowRef={this.onRowRef}
         rowCount={this.props.rowCount}
         rowIndex={rowIndex}
         selected={selected}
-        ariaMode={this.props.ariaMode}
+        ariaLabel={ariaLabel}
         onRowClick={this.onRowClick}
         onRowKeyDown={this.onRowKeyDown}
         onRowMouseDown={this.onRowMouseDown}
         onRowMouseUp={this.onRowMouseUp}
         onRowMouseOver={this.onRowMouseOver}
+        onRowFocus={this.onRowFocus}
+        onRowBlur={this.onRowBlur}
+        onContextMenu={this.onRowContextMenu}
         style={params.style}
         tabIndex={tabIndex}
         children={element}
@@ -891,25 +990,8 @@ export class List extends React.Component<IListProps, IListState> {
       )
     }
 
-    // we select the last item from the selection array for this prop
-    const activeDescendant =
-      this.props.selectedRows.length && this.state.rowIdPrefix
-        ? `${this.state.rowIdPrefix}-${
-            this.props.selectedRows[this.props.selectedRows.length - 1]
-          }`
-        : undefined
-
-    const role = this.props.ariaMode === 'menu' ? 'menu' : 'listbox'
-
     return (
-      <div
-        ref={this.onRef}
-        id={this.props.id}
-        className="list"
-        onKeyDown={this.onKeyDown}
-        role={role}
-        aria-activedescendant={activeDescendant}
-      >
+      <div ref={this.onRef} id={this.props.id} className="list">
         {content}
       </div>
     )
@@ -957,16 +1039,29 @@ export class List extends React.Component<IListProps, IListState> {
     // it with keyboard navigation and select an item.
     const tabIndex =
       this.props.selectedRows.length < 1 && this.props.rowCount > 0 ? 0 : -1
+
+    // we select the last item from the selection array for this prop
+    const activeDescendant =
+      this.props.selectedRows.length && this.state.rowIdPrefix
+        ? `${this.state.rowIdPrefix}-${
+            this.props.selectedRows[this.props.selectedRows.length - 1]
+          }`
+        : undefined
+
+    const containerProps = this.getContainerProps(activeDescendant)
+
     return (
       <FocusContainer
         className="list-focus-container"
         onKeyDown={this.onFocusContainerKeyDown}
+        onFocusWithinChanged={this.onFocusWithinChanged}
       >
         <Grid
-          aria-label={''}
-          role={''}
+          role="listbox"
           ref={this.onGridRef}
           autoContainerWidth={true}
+          containerRole="presentation"
+          containerProps={containerProps}
           width={width}
           height={height}
           columnWidth={width}

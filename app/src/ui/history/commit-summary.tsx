@@ -12,15 +12,13 @@ import { CommitAttribution } from '../lib/commit-attribution'
 import { Tokenizer, TokenResult } from '../../lib/text-token-parser'
 import { wrapRichTextCommitMessage } from '../../lib/wrap-rich-text-commit-message'
 import { DiffOptions } from '../diff/diff-options'
-import { RepositorySectionTab } from '../../lib/app-state'
 import { IChangesetData } from '../../lib/git'
 import { TooltippedContent } from '../lib/tooltipped-content'
-import { clipboard } from 'electron'
-import { TooltipDirection } from '../lib/tooltip'
 import { AppFileStatusKind } from '../../models/status'
 import _ from 'lodash'
 import { LinkButton } from '../lib/link-button'
 import { UnreachableCommitsTab } from './unreachable-commits-dialog'
+import { TooltippedCommitSHA } from '../lib/tooltipped-commit-sha'
 
 interface ICommitSummaryProps {
   readonly repository: Repository
@@ -246,6 +244,7 @@ export class CommitSummary extends React.Component<
     const icon = expanded ? OcticonSymbol.fold : OcticonSymbol.unfold
 
     return (
+      // eslint-disable-next-line jsx-a11y/anchor-is-valid, jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions
       <a onClick={onClick} className="expander">
         <Octicon symbol={icon} />
         {expanded ? 'Collapse' : 'Expand'}
@@ -342,11 +341,6 @@ export class CommitSummary extends React.Component<
     )
   }
 
-  private getShaRef = (useShortSha?: boolean) => {
-    const { selectedCommits } = this.props
-    return useShortSha ? selectedCommits[0].shortSha : selectedCommits[0].sha
-  }
-
   private onHighlightShasInDiff = () => {
     this.props.onHighlightShas(this.props.shasInDiff)
   }
@@ -388,6 +382,7 @@ export class CommitSummary extends React.Component<
     const commitsPluralized = excludedCommitsCount > 1 ? 'commits' : 'commit'
 
     return (
+      // eslint-disable-next-line jsx-a11y/mouse-events-have-key-events
       <div
         className="commit-unreachable-info"
         onMouseOver={this.onHighlightShasNotInDiff}
@@ -435,15 +430,10 @@ export class CommitSummary extends React.Component<
         aria-label="SHA"
       >
         <Octicon symbol={OcticonSymbol.gitCommit} />
-        <TooltippedContent
-          className="sha"
-          tooltip={this.renderShaTooltip()}
-          tooltipClassName="sha-hint"
-          interactive={true}
-          direction={TooltipDirection.SOUTH}
-        >
-          {this.getShaRef(true)}
-        </TooltippedContent>
+        <TooltippedCommitSHA
+          className="selectable"
+          commit={selectedCommits[0]}
+        />
       </li>
     )
   }
@@ -517,7 +507,7 @@ export class CommitSummary extends React.Component<
               title="Diff Options"
             >
               <DiffOptions
-                sourceTab={RepositorySectionTab.History}
+                isInteractiveDiff={false}
                 hideWhitespaceChanges={this.props.hideWhitespaceInDiff}
                 onHideWhitespaceChangesChanged={
                   this.props.onHideWhitespaceInDiffChanged
@@ -538,20 +528,6 @@ export class CommitSummary extends React.Component<
     )
   }
 
-  private renderShaTooltip() {
-    return (
-      <>
-        <code>{this.getShaRef()}</code>
-        <button onClick={this.onCopyShaButtonClick}>Copy</button>
-      </>
-    )
-  }
-
-  private onCopyShaButtonClick = (e: React.MouseEvent<HTMLButtonElement>) => {
-    e.preventDefault()
-    clipboard.writeText(this.getShaRef())
-  }
-
   private renderChangedFilesDescription = () => {
     const fileCount = this.props.changesetData.files.length
     const filesPlural = fileCount === 1 ? 'file' : 'files'
@@ -560,6 +536,7 @@ export class CommitSummary extends React.Component<
     let filesAdded = 0
     let filesModified = 0
     let filesRemoved = 0
+    let filesRenamed = 0
     for (const file of this.props.changesetData.files) {
       switch (file.status.kind) {
         case AppFileStatusKind.New:
@@ -571,8 +548,13 @@ export class CommitSummary extends React.Component<
         case AppFileStatusKind.Deleted:
           filesRemoved += 1
           break
+        case AppFileStatusKind.Renamed:
+          filesRenamed += 1
       }
     }
+
+    const hasFileDescription =
+      filesAdded + filesModified + filesRemoved + filesRenamed > 0
 
     const filesLongDescription = (
       <>
@@ -603,6 +585,15 @@ export class CommitSummary extends React.Component<
             {filesRemoved} deleted
           </span>
         ) : null}
+        {filesRenamed > 0 ? (
+          <span>
+            <Octicon
+              className="files-renamed-icon"
+              symbol={OcticonSymbol.diffRenamed}
+            />
+            {filesRenamed} renamed
+          </span>
+        ) : null}
       </>
     )
 
@@ -610,7 +601,9 @@ export class CommitSummary extends React.Component<
       <TooltippedContent
         className="commit-summary-meta-item without-truncation"
         tooltipClassName="changed-files-description-tooltip"
-        tooltip={fileCount > 0 ? filesLongDescription : undefined}
+        tooltip={
+          fileCount > 0 && hasFileDescription ? filesLongDescription : undefined
+        }
       >
         <Octicon symbol={OcticonSymbol.diff} />
         {filesShortDescription}
@@ -668,7 +661,7 @@ export class CommitSummary extends React.Component<
           <Octicon symbol={OcticonSymbol.tag} />
         </span>
 
-        <span className="tags">{tags.join(', ')}</span>
+        <span className="tags selectable">{tags.join(', ')}</span>
       </li>
     )
   }
